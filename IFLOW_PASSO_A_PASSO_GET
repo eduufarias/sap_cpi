@@ -1,0 +1,499 @@
+# iFlow CPI - Consulta LFA1 (Business Partners)
+
+## 🎯 Objetivo
+Criar um iFlow no SAP CPI que consome sua API REST ABAP e disponibiliza para teste no Postman
+
+---
+
+## 📋 Sua API ABAP Atual
+
+```
+Endpoint SAP: http://vhnoaqs4ci:8000/sap/bc/ui2/consultalfa1
+Método: GET
+Parâmetros: ?lifnr=0001000001 (opcional)
+```
+
+---
+
+## 🔧 PASSO 1: Criar Integration Flow no CPI
+
+### No SAP Integration Suite:
+
+1. **Design** → **Integrations**
+2. Clique em **Create**
+3. Preencha:
+   ```
+   Name: Consulta LFA1 Business Partners
+   ID: ConsultaLFA1_BP
+   Package: [Seu package]
+   ```
+4. Clique em **OK**
+
+---
+
+## 🔌 PASSO 2: Configurar HTTP Sender (Entrada do CPI)
+
+### Configuração:
+
+1. Clique no **Sender** → Arraste até **Start**
+2. Selecione **HTTP**
+
+**Aba Connection:**
+```
+┌────────────────────────────────────────┐
+│ Address: /consulta-bp                  │
+│ Method: GET                            │
+│ Authentication: Basic                  │
+│ User Role: ESBMessaging.send           │
+└────────────────────────────────────────┘
+```
+
+**Aba Processing:**
+```
+┌────────────────────────────────────────┐
+│ Query Parameters: Pass Through         │
+│ Request Headers: *                     │
+│ Response Headers: *                    │
+└────────────────────────────────────────┘
+```
+
+---
+
+## 📝 PASSO 3: Content Modifier 1 - Preparar Request
+
+### Configuração:
+
+**Message Header:**
+```
+┌────────────────────────────────────────┐
+│ Name: Accept                           │
+│ Value: application/json                │
+├────────────────────────────────────────┤
+│ Name: Content-Type                     │
+│ Value: application/json                │
+└────────────────────────────────────────┘
+```
+
+**Exchange Property:**
+```
+┌────────────────────────────────────────┐
+│ Name: lifnr                            │
+│ Type: Expression                       │
+│ Value: ${header.lifnr}                 │
+└────────────────────────────────────────┘
+```
+
+---
+
+## 🔄 PASSO 4: Request Reply - Chamar API ABAP
+
+### Configuração do HTTP Receiver:
+
+**Aba Connection:**
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Address:                                                     │
+│ http://vhnoaqs4ci:8000/sap/bc/ui2/consultalfa1              │
+│                                                              │
+│ Query: ${property.lifnr}                                     │
+│                                                              │
+│ Proxy Type: Internet                                         │
+│ Method: GET                                                  │
+│ Authentication: Basic                                        │
+│ Credential Name: SAP_ABAP_CREDENTIALS                        │
+│ Timeout (in ms): 30000                                       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**IMPORTANTE:** Se o parâmetro lifnr vier na URL, use:
+```
+Address: http://vhnoaqs4ci:8000/sap/bc/ui2/consultalfa1?lifnr=${property.lifnr}
+```
+
+**Aba Processing:**
+```
+┌────────────────────────────────────────┐
+│ Request Headers: Accept,Content-Type   │
+│ Response Headers: *                    │
+└────────────────────────────────────────┘
+```
+
+---
+
+## 💻 PASSO 5: Groovy Script - Processar Response
+
+### Script:
+
+```groovy
+import com.sap.gateway.ip.core.customdev.util.Message
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
+
+def Message processData(Message message) {
+    
+    // Obter o corpo da mensagem (JSON do SAP)
+    def body = message.getBody(String.class)
+    def jsonSlurper = new JsonSlurper()
+    def sapResponse = jsonSlurper.parseText(body)
+    
+    // Processar os dados dos fornecedores
+    def fornecedores = sapResponse.collect { item ->
+        [
+            codigoFornecedor: item.lifnr?.trim() ?: "",
+            nome: item.name1?.trim() ?: "",
+            cidade: item.ort01?.trim() ?: "",
+            regiao: item.regio?.trim() ?: "",
+            pais: item.land1?.trim() ?: ""
+        ]
+    }
+    
+    // Criar resposta formatada
+    def output = [
+        status: "success",
+        timestamp: new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+        totalRegistros: fornecedores.size(),
+        fornecedores: fornecedores
+    ]
+    
+    message.setBody(JsonOutput.toJson(output))
+    message.setHeader("Content-Type", "application/json")
+    
+    return message
+}
+```
+
+---
+
+## 📝 PASSO 6: Content Modifier 2 - Formatar Response
+
+### Configuração:
+
+**Message Header:**
+```
+┌────────────────────────────────────────┐
+│ Name: Content-Type                     │
+│ Value: application/json                │
+├────────────────────────────────────────┤
+│ Name: CamelHttpResponseCode            │
+│ Value: 200                             │
+└────────────────────────────────────────┘
+```
+
+---
+
+## ⚠️ PASSO 7: Exception Subprocess
+
+### Content Modifier (Exception):
+
+**Message Body:**
+```json
+{
+  "status": "error",
+  "message": "${exception.message}",
+  "timestamp": "${date:now:yyyy-MM-dd'T'HH:mm:ss'Z'}",
+  "endpoint": "http://vhnoaqs4ci:8000/sap/bc/ui2/consultalfa1"
+}
+```
+
+**Message Header:**
+```
+┌────────────────────────────────────────┐
+│ Name: CamelHttpResponseCode            │
+│ Value: 500                             │
+└────────────────────────────────────────┘
+```
+
+---
+
+## 🔐 PASSO 8: Criar Credenciais SAP ABAP
+
+### No CPI:
+
+1. **Monitor** → **Security Material**
+2. **Create** → **User Credentials**
+
+```
+┌────────────────────────────────────────┐
+│ Name: SAP_ABAP_CREDENTIALS             │
+│ User: seu_usuario_sap                  │
+│ Password: sua_senha_sap                │
+│ Description: Credenciais SAP ABAP      │
+└────────────────────────────────────────┘
+```
+
+3. Clique em **Deploy**
+
+---
+
+## 🚀 PASSO 9: Deploy do iFlow
+
+1. **Save** (💾)
+2. **Deploy** (🚀)
+3. Aguarde status **Started** (✅)
+
+---
+
+## 🧪 PASSO 10: Testar no Postman
+
+### Obter Endpoint CPI:
+
+```
+https://seu-tenant.it-cpi.cfapps.eu10.hana.ondemand.com/http/consulta-bp
+```
+
+### Teste 1: Buscar 10 Fornecedores (sem parâmetro)
+
+```http
+GET https://seu-tenant.it-cpi.cfapps.eu10.hana.ondemand.com/http/consulta-bp
+Authorization: Basic base64(user:password)
+```
+
+**Response Esperada:**
+```json
+{
+  "status": "success",
+  "timestamp": "2024-11-18T10:30:00Z",
+  "totalRegistros": 10,
+  "fornecedores": [
+    {
+      "codigoFornecedor": "0001000001",
+      "nome": "Fornecedor Teste",
+      "cidade": "São Paulo",
+      "regiao": "SP",
+      "pais": "BR"
+    }
+  ]
+}
+```
+
+### Teste 2: Buscar Fornecedor Específico
+
+```http
+GET https://seu-tenant.it-cpi.cfapps.eu10.hana.ondemand.com/http/consulta-bp?lifnr=0001000001
+Authorization: Basic base64(user:password)
+```
+
+**Response Esperada:**
+```json
+{
+  "status": "success",
+  "timestamp": "2024-11-18T10:30:00Z",
+  "totalRegistros": 1,
+  "fornecedores": [
+    {
+      "codigoFornecedor": "0001000001",
+      "nome": "Fornecedor Específico",
+      "cidade": "Rio de Janeiro",
+      "regiao": "RJ",
+      "pais": "BR"
+    }
+  ]
+}
+```
+
+---
+
+## 📊 Diagrama do Fluxo Completo
+
+```
+POSTMAN
+   │
+   │ GET /http/consulta-bp?lifnr=0001000001
+   │
+   ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      SAP CPI iFlow                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────┐   ┌───────┐   ┌─────────────┐                │
+│  │ Sender  │──>│ Start │──>│  Content    │                │
+│  │  HTTP   │   └───────┘   │ Modifier 1  │                │
+│  └─────────┘               └─────────────┘                │
+│                                   │                         │
+│                                   ▼                         │
+│                            ┌─────────────┐                 │
+│                            │  Request    │                 │
+│                            │   Reply     │                 │
+│                            └─────────────┘                 │
+│                                   │                         │
+│                                   ▼                         │
+│                            ┌──────────────┐                │
+│                            │   Receiver   │                │
+│                            │  (SAP ABAP)  │                │
+│                            └──────────────┘                │
+│                                   │                         │
+│                                   ▼                         │
+│                            ┌─────────────┐                 │
+│                            │   Groovy    │                 │
+│                            │   Script    │                 │
+│                            └─────────────┘                 │
+│                                   │                         │
+│                                   ▼                         │
+│                            ┌─────────────┐   ┌───────┐     │
+│                            │  Content    │──>│  End  │     │
+│                            │ Modifier 2  │   └───────┘     │
+│                            └─────────────┘                 │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+   │
+   │ Response JSON
+   │
+   ▼
+POSTMAN
+```
+
+---
+
+## 🔗 Fluxo de Dados Detalhado
+
+```
+1. POSTMAN envia:
+   GET /http/consulta-bp?lifnr=0001000001
+
+2. CPI recebe e extrai parâmetro:
+   lifnr = 0001000001
+
+3. CPI chama SAP ABAP:
+   GET http://vhnoaqs4ci:8000/sap/bc/ui2/consultalfa1?lifnr=0001000001
+
+4. SAP ABAP retorna:
+   [
+     {
+       "lifnr": "0001000001",
+       "name1": "Fornecedor Teste",
+       "ort01": "São Paulo",
+       "regio": "SP",
+       "land1": "BR"
+     }
+   ]
+
+5. Groovy processa e formata:
+   {
+     "status": "success",
+     "timestamp": "2024-11-18T10:30:00Z",
+     "totalRegistros": 1,
+     "fornecedores": [...]
+   }
+
+6. CPI retorna para POSTMAN:
+   HTTP 200 OK
+   Content-Type: application/json
+   {...}
+```
+
+---
+
+## 📦 Collection Postman
+
+Importe esta collection:
+
+```json
+{
+  "info": {
+    "name": "SAP CPI - Consulta LFA1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Buscar 10 Fornecedores",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{cpi_endpoint}}/http/consulta-bp",
+          "host": ["{{cpi_endpoint}}"],
+          "path": ["http", "consulta-bp"]
+        }
+      }
+    },
+    {
+      "name": "Buscar Fornecedor por Código",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{cpi_endpoint}}/http/consulta-bp?lifnr=0001000001",
+          "host": ["{{cpi_endpoint}}"],
+          "path": ["http", "consulta-bp"],
+          "query": [
+            {
+              "key": "lifnr",
+              "value": "0001000001"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "auth": {
+    "type": "basic",
+    "basic": [
+      {
+        "key": "username",
+        "value": "{{cpi_user}}",
+        "type": "string"
+      },
+      {
+        "key": "password",
+        "value": "{{cpi_password}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "cpi_endpoint",
+      "value": "https://seu-tenant.it-cpi.cfapps.eu10.hana.ondemand.com",
+      "type": "string"
+    },
+    {
+      "key": "cpi_user",
+      "value": "seu_usuario",
+      "type": "string"
+    },
+    {
+      "key": "cpi_password",
+      "value": "sua_senha",
+      "type": "string"
+    }
+  ]
+}
+```
+
+---
+
+## ✅ Checklist
+
+- [ ] iFlow criado no CPI
+- [ ] HTTP Sender configurado com `/consulta-bp`
+- [ ] Content Modifier 1 preparando headers
+- [ ] Request Reply apontando para `http://vhnoaqs4ci:8000/sap/bc/ui2/consultalfa1`
+- [ ] Credenciais `SAP_ABAP_CREDENTIALS` criadas
+- [ ] Groovy Script processando response
+- [ ] Content Modifier 2 formatando response
+- [ ] Exception Subprocess configurado
+- [ ] iFlow deployado com sucesso
+- [ ] Testado no Postman
+
+---
+
+## 🐛 Troubleshooting
+
+### Erro: Connection Refused
+- Verifique se o servidor SAP está acessível do CPI
+- Teste: `telnet vhnoaqs4ci 8000`
+
+### Erro: 401 Unauthorized
+- Verifique as credenciais `SAP_ABAP_CREDENTIALS`
+- Teste direto no navegador: `http://vhnoaqs4ci:8000/sap/bc/ui2/consultalfa1`
+
+### Erro: Timeout
+- Aumente o timeout no HTTP Receiver para 60000ms
+- Verifique performance da query no SAP
+
+### Dados não retornam
+- Verifique se existem dados na LFA1
+- Teste a API ABAP diretamente
+- Ative o Trace no iFlow
+
+Pronto! Seu iFlow está configurado para consumir a API ABAP e disponibilizar no Postman! 🚀
